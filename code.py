@@ -25,8 +25,9 @@ beep("startup")
 # ============================================================
 # OTA UPDATE
 # ============================================================
-OTA_VERSION_URL = "https://drive.google.com/uc?export=download&id=1TvXKkX212y2a0_pDiJRerDrGmqvmzezw"
-OTA_CODE_URL = "https://drive.usercontent.google.com/download?id=1tHtRslRqYZ2N3JMNlwnz4P0YA-cHEwf9&export=download&confirm=t"
+OTA_VERSION_URL = "https://raw.githubusercontent.com/MVPPROIT/magtag-prayer/main/version.txt"
+OTA_CODE_URL    = "https://raw.githubusercontent.com/MVPPROIT/magtag-prayer/main/code.py"
+
 def get_local_version():
     try:
         with open("/version.txt", "r") as f:
