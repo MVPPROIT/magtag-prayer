@@ -431,11 +431,49 @@ def jamaat_wait(duration):
     if not get_leds_enabled():
         sleep_normal(duration)
         return
-    # Stay awake — LEDs need power to stay on
     end_time = time.monotonic() + duration
     while time.monotonic() < end_time:
         time.sleep(1)
     microcontroller.reset()
+
+def get_makruh_end(today, now_s):
+    """Return seconds-of-day when current Makruh period ends, or 0 if not in one."""
+    sr_s = time_to_secs(today.get('sr', '-'))
+    db_s = time_to_secs(today.get('db', '-'))
+    mj_s = time_to_secs(today.get('mj', '-'))
+    if sr_s != 999999 and sr_s <= now_s <= sr_s + 1200:
+        return sr_s + 1200           # Sunrise + 20 min
+    if db_s != 999999 and db_s - 900 <= now_s <= db_s:
+        return db_s                  # Dhuhr begin
+    if mj_s != 999999 and mj_s - 1200 <= now_s <= mj_s:
+        return mj_s                  # Maghrib jamaat
+    return 0
+
+def sleep_after_render(sleep_duration, today, now_s, event_type):
+    """Sleep until next event, but stay awake during any active LED period."""
+    if not get_leds_enabled():
+        sleep_normal(sleep_duration)
+        return
+
+    # Check if currently in Makruh time
+    makruh_end = get_makruh_end(today, now_s)
+    if makruh_end > 0:
+        # Stay awake until Makruh period ends
+        makruh_remaining = makruh_end - now_s
+        end_time = time.monotonic() + makruh_remaining
+        while time.monotonic() < end_time:
+            time.sleep(1)
+        # Makruh over — turn off LEDs and sleep for remainder
+        magtag.peripherals.neopixels.fill((0, 0, 0))
+        remaining_sleep = sleep_duration - makruh_remaining
+        if remaining_sleep > 5:
+            sleep_normal(remaining_sleep)
+        else:
+            microcontroller.reset()
+        return
+
+    # Not in Makruh — normal sleep
+    sleep_normal(sleep_duration)
 
 # ============================================================
 # RENDER FUNCTIONS
@@ -765,7 +803,7 @@ def render_and_sleep_normal(view):
         sleep_duration, event_type = render_simple_view(today, now, now_s, evs)
 
     update_leds(today, now_s, event_type)
-    sleep_normal(sleep_duration)
+    sleep_after_render(sleep_duration, today, now_s, event_type)
 
 # ============================================================
 # MAIN
