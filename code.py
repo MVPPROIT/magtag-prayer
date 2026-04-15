@@ -311,7 +311,7 @@ def flash_adhan_leds():
 def get_led_color(today, now_s, event_type=None):
     if not get_leds_enabled():
         return (0, 0, 0)
-    if is_makruh_time(today, now_s):
+    if is_makruh_time(today, now_s) or event_type == "MAKRUH":
         return (255, 0, 0)
     if event_type == "JAMAAT":
         return (0, 255, 0)
@@ -353,6 +353,17 @@ def build_events(today, now):
     evs.append(("Maghrib", time_to_secs(m_first), "NEXT",   m_first, m_jam))
     if time_to_secs(m_jam) > time_to_secs(m_first):
         evs.append(("Maghrib", time_to_secs(m_jam), "JAMAAT", m_first, m_jam))
+
+    # Zawal: wake 15 min before Dhuhr
+    db_s = time_to_secs(today.get('db', '-'))
+    if db_s != 999999 and db_s - 900 > 0:
+        evs.append(("Zawal", db_s - 900, "MAKRUH", today.get('db', ''), None))
+
+    # Sunset Makruh: wake 20 min before Maghrib Jamaat
+    mj_s = time_to_secs(today.get('mj', '-'))
+    if mj_s != 999999 and mj_s - 1200 > 0:
+        evs.append(("Sunset", mj_s - 1200, "MAKRUH", today.get('mj', ''), None))
+
     evs.sort(key=sort_key)
     return evs
 
