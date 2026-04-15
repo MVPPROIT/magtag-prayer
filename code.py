@@ -491,9 +491,10 @@ def render_detail_view():
     magtag.add_text(text_position=(148, 72),  text_scale=4, text_anchor_point=(0.5, 0.5))
     magtag.add_text(text_position=(148, 112), text_scale=2, text_anchor_point=(0.5, 0.5))
 
+    # Sync time before reading it
+    json_data, _ = fetch_prayer_data(time.localtime())
     now = time.localtime()
     now_s = (now.tm_hour * 3600) + (now.tm_min * 60)
-    json_data, _ = fetch_prayer_data(now)
 
     if json_data is None:
         magtag.set_text("Offline",    0, auto_refresh=False)
@@ -628,14 +629,38 @@ def run_settings():
 # SHARED RENDER + SLEEP
 # ============================================================
 def render_and_sleep_normal(view):
+    # Step 1: Connect and sync time FIRST so now_s is accurate
+    connected = connect_with_retry()
+    if connected:
+        try:
+            magtag.network.get_local_time()
+            check_ota()
+        except Exception:
+            pass
+
+    # Step 2: Get time AFTER NTP sync
     now = time.localtime()
     now_s = (now.tm_hour * 3600) + (now.tm_min * 60)
 
-    # Check if still inside a Jamaat window (survives resets)
+    # Step 3: Check if still inside a Jamaat window (survives resets)
     jamaat_until = get_jamaat_until()
     jamaat_name  = get_jamaat_name()
     if jamaat_until > 0 and now_s < jamaat_until and jamaat_name:
-        json_data, _ = fetch_prayer_data(now)
+        json_data = None
+        if connected:
+            try:
+                url = (
+                    "https://cdn.masjid247.com/jsonfiles/iot/"
+                    + MASJID_ID + "/"
+                    + str(now.tm_year) + "/"
+                    + str(now.tm_mon) + ".json"
+                )
+                json_data = magtag.network.fetch(url).json()
+                save_cache(json_data)
+            except Exception:
+                json_data = load_cache()
+        if json_data is None:
+            json_data = load_cache()
         today = fetch_today(json_data, now) if json_data else None
         led_color = render_jamaat_display(jamaat_name, today, now_s)
         remaining = jamaat_until - now_s
@@ -650,7 +675,22 @@ def render_and_sleep_normal(view):
         clear_jamaat_until()
         set_jamaat_name("")
 
-    json_data, online = fetch_prayer_data(now)
+    # Step 4: Fetch prayer data (connection already open)
+    json_data = None
+    if connected:
+        try:
+            url = (
+                "https://cdn.masjid247.com/jsonfiles/iot/"
+                + MASJID_ID + "/"
+                + str(now.tm_year) + "/"
+                + str(now.tm_mon) + ".json"
+            )
+            json_data = magtag.network.fetch(url).json()
+            save_cache(json_data)
+        except Exception:
+            json_data = load_cache()
+    if json_data is None:
+        json_data = load_cache()
 
     if json_data is None:
         magtag.add_text(text_position=(148, 40), text_scale=4, text_anchor_point=(0.5, 0.5))
