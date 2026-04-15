@@ -45,27 +45,72 @@ def set_local_version(v):
         pass
 
 def check_ota():
+    # Step 1: Fetch remote version
     try:
-        remote_raw = magtag.network.fetch(OTA_VERSION_URL).text.strip()
+        resp = magtag.network.fetch(OTA_VERSION_URL)
+        remote_raw = resp.text.strip()
+        resp.close()
+    except Exception as e:
+        return  # No connection or URL failed — silently skip
+
+    try:
         remote_ver = int(remote_raw)
-        local_ver  = get_local_version()
-        if remote_ver <= local_ver:
-            return
-        magtag.add_text(text_position=(148, 45), text_scale=2, text_anchor_point=(0.5, 0.5))
-        magtag.add_text(text_position=(148, 85), text_scale=2, text_anchor_point=(0.5, 0.5))
-        magtag.set_text("Updating...", 0, auto_refresh=False)
-        magtag.set_text("v" + str(local_ver) + " -> v" + str(remote_ver), 1, auto_refresh=True)
-        beep("update")
-        new_code = magtag.network.fetch(OTA_CODE_URL).text
-        with open("/code.py", "w") as f:
-            f.write(new_code)
-        set_local_version(remote_ver)
-        magtag.set_text("Update Done!", 0, auto_refresh=False)
-        magtag.set_text("Restarting...", 1, auto_refresh=True)
-        time.sleep(2)
-        microcontroller.reset()
     except Exception:
-        pass
+        return  # version.txt not a valid number
+
+    local_ver = get_local_version()
+    if remote_ver <= local_ver:
+        return  # Already up to date
+
+    # Step 2: Show update screen — add text boxes only now that we know update is needed
+    magtag.add_text(text_position=(148, 45), text_scale=2, text_anchor_point=(0.5, 0.5))
+    magtag.add_text(text_position=(148, 85), text_scale=2, text_anchor_point=(0.5, 0.5))
+    magtag.set_text("Updating...", 0, auto_refresh=False)
+    magtag.set_text("v" + str(local_ver) + " -> v" + str(remote_ver), 1, auto_refresh=True)
+    beep("update")
+
+    # Step 3: Download new code
+    try:
+        resp = magtag.network.fetch(OTA_CODE_URL)
+        new_code = resp.text
+        resp.close()
+    except Exception:
+        magtag.set_text("DL Failed", 0, auto_refresh=False)
+        magtag.set_text("Try later", 1, auto_refresh=True)
+        time.sleep(3)
+        return
+
+    # Step 4: Write new code to a temp file first, then rename
+    try:
+        with open("/code_new.py", "w") as f:
+            f.write(new_code)
+    except Exception:
+        magtag.set_text("Write",   0, auto_refresh=False)
+        magtag.set_text("Failed!", 1, auto_refresh=True)
+        time.sleep(3)
+        return
+
+    # Step 5: Replace code.py with new file
+    try:
+        import os
+        os.rename("/code_new.py", "/code.py")
+    except Exception:
+        # rename not available in older CircuitPython — write directly
+        try:
+            with open("/code.py", "w") as f:
+                f.write(new_code)
+        except Exception:
+            magtag.set_text("Replace",  0, auto_refresh=False)
+            magtag.set_text("Failed!",  1, auto_refresh=True)
+            time.sleep(3)
+            return
+
+    # Step 6: Save new version and reboot
+    set_local_version(remote_ver)
+    magtag.set_text("Update Done!", 0, auto_refresh=False)
+    magtag.set_text("Restarting...", 1, auto_refresh=True)
+    time.sleep(2)
+    microcontroller.reset()
 
 # ============================================================
 # CONFIG & PERSISTENCE
@@ -441,7 +486,7 @@ def render_simple_view(today, now, now_s, evs):
     title, d_time, sleep_duration = build_display(name, etype, t1, t2, now_s, etime)
     magtag.set_text(title,  0, auto_refresh=False)
     magtag.set_text(d_time, 1, auto_refresh=True)
-    return sleep_duration, etype, etype
+    return sleep_duration, etype
 
 # ------ VIEW 2: Enhanced ------
 def render_enhanced_view(today, now, now_s, evs):
