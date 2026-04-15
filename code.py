@@ -3,12 +3,9 @@ import alarm
 import board
 import microcontroller
 import json
-import neopixel
-import digitalio
 from adafruit_magtag.magtag import MagTag
 
 magtag = MagTag()
-
 # ============================================================
 # BEEP
 # ============================================================
@@ -325,18 +322,7 @@ def update_leds(today, now_s, event_type=None):
     magtag.peripherals.neopixels.fill(color)
     return color
 
-def persist_leds(color):
-    """Reinitialise NeoPixels after deinit so LEDs stay on during deep sleep."""
-    if color == (0, 0, 0):
-        return
-    try:
-        np_pwr = digitalio.DigitalInOut(board.NEOPIXEL_POWER)
-        np_pwr.switch_to_output(value=False)
-        pixels = neopixel.NeoPixel(board.NEOPIXEL, 4, brightness=0.5, auto_write=False)
-        pixels.fill(color)
-        pixels.show()
-    except Exception:
-        pass
+
 
 def sort_key(item):
     return item[1]
@@ -412,20 +398,18 @@ def fetch_prayer_data(now):
 # ============================================================
 # SLEEP HELPERS
 # ============================================================
-def sleep_buttons_only(led_color=(0, 0, 0)):
+def sleep_buttons_only():
     magtag.peripherals.deinit()
-    persist_leds(led_color)
     a_alarm = alarm.pin.PinAlarm(pin=board.BUTTON_A, value=False, pull=True)
     b_alarm = alarm.pin.PinAlarm(pin=board.BUTTON_B, value=False, pull=True)
     c_alarm = alarm.pin.PinAlarm(pin=board.BUTTON_C, value=False, pull=True)
     d_alarm = alarm.pin.PinAlarm(pin=board.BUTTON_D, value=False, pull=True)
     alarm.exit_and_deep_sleep_until_alarms(a_alarm, b_alarm, c_alarm, d_alarm)
 
-def sleep_detail(led_color=(0, 0, 0)):
+def sleep_detail():
     now = time.localtime()
     secs = 60 - now.tm_sec
     magtag.peripherals.deinit()
-    persist_leds(led_color)
     t_alarm = alarm.time.TimeAlarm(monotonic_time=time.monotonic() + secs)
     a_alarm = alarm.pin.PinAlarm(pin=board.BUTTON_A, value=False, pull=True)
     b_alarm = alarm.pin.PinAlarm(pin=board.BUTTON_B, value=False, pull=True)
@@ -433,15 +417,25 @@ def sleep_detail(led_color=(0, 0, 0)):
     d_alarm = alarm.pin.PinAlarm(pin=board.BUTTON_D, value=False, pull=True)
     alarm.exit_and_deep_sleep_until_alarms(t_alarm, a_alarm, b_alarm, c_alarm, d_alarm)
 
-def sleep_normal(duration, led_color=(0, 0, 0)):
+def sleep_normal(duration):
     magtag.peripherals.deinit()
-    persist_leds(led_color)
     t_alarm = alarm.time.TimeAlarm(monotonic_time=time.monotonic() + duration + 5)
     a_alarm = alarm.pin.PinAlarm(pin=board.BUTTON_A, value=False, pull=True)
     b_alarm = alarm.pin.PinAlarm(pin=board.BUTTON_B, value=False, pull=True)
     c_alarm = alarm.pin.PinAlarm(pin=board.BUTTON_C, value=False, pull=True)
     d_alarm = alarm.pin.PinAlarm(pin=board.BUTTON_D, value=False, pull=True)
     alarm.exit_and_deep_sleep_until_alarms(t_alarm, a_alarm, b_alarm, c_alarm, d_alarm)
+
+def jamaat_wait(duration):
+    """If LEDs are ON, stay awake so LEDs remain lit. If OFF, deep sleep."""
+    if not get_leds_enabled():
+        sleep_normal(duration)
+        return
+    # Stay awake — LEDs need power to stay on
+    end_time = time.monotonic() + duration
+    while time.monotonic() < end_time:
+        time.sleep(1)
+    microcontroller.reset()
 
 # ============================================================
 # RENDER FUNCTIONS
@@ -586,9 +580,8 @@ def render_detail_view():
     magtag.set_text(prayer_name,   2, auto_refresh=False)
     magtag.set_text(progress_line, 3, auto_refresh=True)
 
-    led_color = update_leds(today, now_s, event_type)
+    update_leds(today, now_s, event_type)
     beep("update")
-    return led_color
 
 # ------ All Prayers View ------
 def render_all_prayers_view(json_data, now):
@@ -622,13 +615,29 @@ def render_jamaat_display(prayer_name, today, now_s):
     magtag.add_text(text_position=(148, 40), text_scale=4, text_anchor_point=(0.5, 0.5))
     magtag.add_text(text_position=(148, 95), text_scale=3, text_anchor_point=(0.5, 0.5))
     magtag.set_text(prayer_name + " Jamaat", 0, auto_refresh=False)
-    magtag.set_text("",                       1, auto_refresh=True)
+
+    # Show the jamaat time on the second line
+    jamaat_time = ""
     if today:
-        led_color = update_leds(today, now_s, "JAMAAT")
-    else:
-        led_color = (0, 255, 0) if get_leds_enabled() else (0, 0, 0)
+        prayer_key_map = {
+            "Fajr":    "fj",
+            "Dhuhr":   "dj",
+            "Asr":     "aj",
+            "Maghrib": "mj",
+            "Isha":    "ij",
+        }
+        key = prayer_key_map.get(prayer_name, None)
+        if key and key in today and today[key] and today[key] != "-":
+            jamaat_time = to_12h(today[key])
+        elif prayer_name.startswith("Jumuah"):
+            j1 = today.get("j1", "")
+            if j1 and j1 != "-":
+                jamaat_time = to_12h(j1)
+
+    magtag.set_text(jamaat_time, 1, auto_refresh=True)
+
+    update_leds(today, now_s, "JAMAAT")
     beep("update")
-    return led_color
 
 # ============================================================
 # SETTINGS
@@ -707,10 +716,10 @@ def render_and_sleep_normal(view):
         if json_data is None:
             json_data = load_cache()
         today = fetch_today(json_data, now) if json_data else None
-        led_color = render_jamaat_display(jamaat_name, today, now_s)
+        render_jamaat_display(jamaat_name, today, now_s)
         remaining = jamaat_until - now_s
         if remaining > 5:
-            sleep_normal(remaining, led_color)
+            jamaat_wait(remaining)
         else:
             clear_jamaat_until()
             set_jamaat_name("")
@@ -755,8 +764,8 @@ def render_and_sleep_normal(view):
     else:
         sleep_duration, event_type = render_simple_view(today, now, now_s, evs)
 
-    led_color = update_leds(today, now_s, event_type)
-    sleep_normal(sleep_duration, led_color)
+    update_leds(today, now_s, event_type)
+    sleep_normal(sleep_duration)
 
 # ============================================================
 # MAIN
@@ -848,10 +857,8 @@ elif isinstance(wake, alarm.pin.PinAlarm) and wake.pin == board.BUTTON_A:
         new_view = "simple"
 
     if new_view == "detail":
-        led_color = render_detail_view()
-        if led_color is None:
-            led_color = (0, 0, 0)
-        sleep_detail(led_color)
+        render_detail_view()
+        sleep_detail()
     else:
         render_and_sleep_normal(new_view)
 
@@ -862,10 +869,8 @@ else:
     prev_name = get_prev_prayer_name()
 
     if view == "detail":
-        led_color = render_detail_view()
-        if led_color is None:
-            led_color = (0, 0, 0)
-        sleep_detail(led_color)
+        render_detail_view()
+        sleep_detail()
 
     elif view == "prayers":
         now = time.localtime()
@@ -885,12 +890,12 @@ else:
         set_jamaat_until(jamaat_end)
         set_jamaat_name(prev_name)
 
-        led_color = render_jamaat_display(prev_name, today, now_s)
+        render_jamaat_display(prev_name, today, now_s)
 
         set_prev_event_type("")
         set_prev_prayer_name("")
 
-        sleep_normal(duration, led_color)
+        sleep_normal(duration)
 
     else:
         if isinstance(wake, alarm.time.TimeAlarm) and prev_type == "NEXT":
